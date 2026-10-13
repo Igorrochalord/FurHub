@@ -1,0 +1,72 @@
+name: furconhub
+
+services:
+  db:
+    image: postgis/postgis:16-3.4-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-furconhub}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-furconhub_dev}
+      POSTGRES_DB: ${POSTGRES_DB:-furconhub}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    ports:
+      - "127.0.0.1:${DB_PORT:-5432}:5432" # somente local; remova em produção
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  backend:
+    build: ./backend
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-furconhub}:${POSTGRES_PASSWORD:-furconhub_dev}@db:5432/${POSTGRES_DB:-furconhub}
+      SECRET_KEY: ${SECRET_KEY:-dev-insecure-change-me-dev-insecure-change-me}
+      ENVIRONMENT: ${ENVIRONMENT:-development}
+      SEED_DEMO: ${SEED_DEMO:-true}
+      PAYMENT_FEE_PERCENT: ${PAYMENT_FEE_PERCENT:-3.99}
+      PAYMENT_FEE_FIXED_CENTS: ${PAYMENT_FEE_FIXED_CENTS:-39}
+      GEOCODER_URL: ${GEOCODER_URL:-https://nominatim.openstreetmap.org/search}
+      GEOCODER_USER_AGENT: ${GEOCODER_USER_AGENT:-FurConHub/0.1 (self-hosted)}
+      FRONTEND_SHELL_URL: http://frontend:8080/__shell.html
+
+  frontend:
+    build:
+      context: ./frontend
+      args:
+        VITE_SHOW_DEMO: ${SEED_DEMO:-true}
+        VITE_TILE_URL: ${VITE_TILE_URL:-}
+        VITE_TILE_ATTRIBUTION: ${VITE_TILE_ATTRIBUTION:-}
+    restart: unless-stopped
+    depends_on:
+      - backend
+    ports:
+      - "${WEB_PORT:-8080}:8080"
+
+  # URL pública temporária (sem conta): docker compose --profile tunnel up -d
+  cloudflared:
+    profiles: ["tunnel"]
+    image: cloudflare/cloudflared:latest
+    restart: unless-stopped
+    command: tunnel --no-autoupdate --url http://frontend:8080
+    depends_on:
+      - frontend
+
+  # URL fixa com domínio próprio (requer TUNNEL_TOKEN): docker compose --profile named-tunnel up -d
+  cloudflared-named:
+    profiles: ["named-tunnel"]
+    image: cloudflare/cloudflared:latest
+    restart: unless-stopped
+    command: tunnel --no-autoupdate run
+    environment:
+      TUNNEL_TOKEN: ${TUNNEL_TOKEN:-}
+    depends_on:
+      - frontend
+
+volumes:
+  pgdata:
